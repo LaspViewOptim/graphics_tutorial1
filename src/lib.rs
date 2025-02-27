@@ -16,6 +16,7 @@ struct State<'a> {
     queue: wgpu::Queue,
     config: wgpu::SurfaceConfiguration,
     size: winit::dpi::PhysicalSize<u32>,
+    clear_color: wgpu::Color,
     // The window must be declared after the surface so
     // it gets dropped after it as the surface contains
     // unsafe references to the window's resources.
@@ -88,12 +89,15 @@ impl<'a> State<'a> {
             view_formats: vec![],
         };
 
+        let clear_color = wgpu::Color::BLACK;
+
         Self {
             surface,
             device,
             queue,
             config,
             size,
+            clear_color,
             window,
         }
     }
@@ -113,13 +117,24 @@ impl<'a> State<'a> {
 
     #[allow(unused_variables)]
     fn input(&mut self, event: &WindowEvent) -> bool {
-        false
+        match event {
+            WindowEvent::CursorMoved { position, .. } => {
+                self.clear_color = wgpu::Color {
+                    r: position.x as f64 / self.size.width as f64,
+                    g: position.y as f64 / self.size.height as f64,
+                    b: 1.0,
+                    a: 1.0,
+                };
+                true
+            }
+            _ => false,
+        }
     }
 
     fn update(&mut self) {}
 
     fn render(&mut self) -> Result<(), wgpu::SurfaceError> {
-        let output = self.surface.get_current_texture()?;
+        let output: wgpu::SurfaceTexture = self.surface.get_current_texture()?;
         let view = output
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());

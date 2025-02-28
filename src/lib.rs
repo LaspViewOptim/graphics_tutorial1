@@ -1,5 +1,6 @@
 use std::iter;
 use bytemuck::{Pod, Zeroable};
+mod texture;
 
 #[cfg(target_arch="wasm32")]
 use wasm_bindgen::prelude::*;
@@ -65,6 +66,7 @@ struct State<'a> {
     index_buffer: wgpu::Buffer,
     num_indicies: u32,
     diffuse_bind_group: wgpu::BindGroup,
+    diffuse_texture: texture::Texture,
 }
 
 impl<'a> State<'a> {
@@ -137,56 +139,7 @@ impl<'a> State<'a> {
 
 
         let diffuse_bytes = include_bytes!("103540876_1.png");
-        let diffuse_image = image::load_from_memory(diffuse_bytes).unwrap();
-        let diffuse_rgba = diffuse_image.to_rgba8();
-
-        use image::GenericImageView;
-        let dimentions = diffuse_image.dimensions();
-
-        let texure_size = wgpu::Extent3d {
-            width: dimentions.0,
-            height: dimentions.1,
-            depth_or_array_layers: 1,
-        };
-        let diffuse_texure = device.create_texture(
-            &wgpu::TextureDescriptor {
-                size: texure_size,
-                mip_level_count: 1, 
-                sample_count: 1,
-                dimension: wgpu::TextureDimension::D2,
-                format: wgpu::TextureFormat::Rgba8UnormSrgb,
-                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-                label: Some("diffuse_texture"),
-                view_formats: &[],
-            }
-        );
-
-        queue.write_texture(
-            wgpu::TexelCopyTextureInfo {
-                texture: &diffuse_texure,
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-            },
-            &diffuse_rgba, 
-            wgpu::TexelCopyBufferLayout { 
-                offset: 0, 
-                bytes_per_row: Some(4 * dimentions.0), 
-                rows_per_image: Some(dimentions.1),
-            }, 
-            texure_size,
-        );
-
-        let diffuse_texure_view = diffuse_texure.create_view(&wgpu::TextureViewDescriptor::default());
-        let diffuse_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-            address_mode_u: wgpu::AddressMode::ClampToEdge,
-            address_mode_v: wgpu::AddressMode::ClampToEdge,
-            address_mode_w: wgpu::AddressMode::ClampToEdge,
-            mag_filter: wgpu::FilterMode::Linear,
-            min_filter: wgpu::FilterMode::Nearest,
-            mipmap_filter: wgpu::FilterMode::Nearest,
-            ..Default::default()
-        });
+        let diffuse_texture = texture::Texture::from_bytes(&device, &queue, diffuse_bytes, "aoi.png").unwrap();
 
         let texture_bind_group_layout = device.create_bind_group_layout(
             &wgpu::BindGroupLayoutDescriptor {
@@ -217,14 +170,14 @@ impl<'a> State<'a> {
                 entries: &[
                     wgpu::BindGroupEntry {
                         binding: 0,
-                        resource: wgpu::BindingResource::TextureView(&diffuse_texure_view),
+                        resource: wgpu::BindingResource::TextureView(&diffuse_texture.view),
                     },
                     wgpu::BindGroupEntry {
                         binding: 1,
-                        resource: wgpu::BindingResource::Sampler(&diffuse_sampler),
+                        resource: wgpu::BindingResource::Sampler(&diffuse_texture.sampler),
                     },
                 ],
-                label: Some("texture_bindgroup"),
+                label: Some("diffuse_bind_group"),
             }
         );
 
@@ -317,6 +270,7 @@ impl<'a> State<'a> {
             index_buffer,
             num_indicies,
             diffuse_bind_group,
+            diffuse_texture,
         }
     }
 

@@ -2,7 +2,9 @@
 struct CameraUniform {
     view_proj: mat4x4<f32>,
 };
-@group(1) @binding(0) // 1.
+// second group passed by render_pipeline. (see render_pipeline_layout)
+// this is the camera_bind_group. (see camera_bind_group)
+@group(1) @binding(0) 
 var<uniform> camera: CameraUniform;
 
 struct VertexInput {
@@ -21,12 +23,15 @@ fn vs_main(
 ) -> VertexOutput {
     var out: VertexOutput;
     out.tex_coords = model.tex_coords;
-    out.clip_position = camera.view_proj * vec4<f32>(model.position, 1.0); // 2.
+    out.clip_position = camera.view_proj * vec4<f32>(model.position, 1.0);
     return out;
 }
 
 // Fragment shader
-
+// first group passed by render_pipeline. (see render_pipeline_layout)
+// this is the texture_bind_group. (see texture_bind_group)
+// first element: 2d texture
+// second element: sampler (see texture_bind_group_layout)
 @group(0) @binding(0)
 var t_diffuse: texture_2d<f32>;
 @group(0) @binding(1)

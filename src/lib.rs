@@ -49,40 +49,43 @@ const INDICIES: &[u16] = &[
     2, 3, 4, // CDE
 ];
 
-#[rustfmt::skip]
-pub const OPENGL_TO_WGPU_MATRIX: cgmath::Matrix4<f32> = cgmath::Matrix4::new(
-    1.0, 0.0, 0.0, 0.0,
-    0.0, 1.0, 0.0, 0.0,
-    0.0, 0.0, 0.5, 0.5,
-    0.0, 0.0, 0.0, 1.0,
-);
 struct Camera {
-    eye: cgmath::Point3<f32>,
-    target: cgmath::Point3<f32>,
-    up: cgmath::Vector3<f32>,
-    aspect: f32,
-    fovy: f32,
-    znear: f32,
-    zfar: f32,
+    eye: cgmath::Point3<f32>, // coordinates of the camera in world space
+    target: cgmath::Point3<f32>, // where the camera is looking at in world space
+    up: cgmath::Vector3<f32>, // the up vector of the camera in world space
+    aspect: f32, // aspect ratio of the camera
+    fovy: f32, // vertical field of view in degrees
+    znear: f32, // near plane
+    zfar: f32, // far plane
 }
 impl Camera {
+    #[rustfmt::skip]
+    const OPENGL_TO_WGPU_MATRIX: cgmath::Matrix4<f32> = cgmath::Matrix4::new(
+        1.0, 0.0, 0.0, 0.0,
+        0.0, 1.0, 0.0, 0.0,
+        0.0, 0.0, 0.5, 0.5,
+        0.0, 0.0, 0.0, 1.0,
+    );
     fn build_view_projection_matrix(&self) -> cgmath::Matrix4<f32> {
-        // 1.
+        // view is a matrix, which transforms coordinates from world space to view space
+        // (a, b, c)^T in word space -> view * (a, b, c)^T in view space
         let view = cgmath::Matrix4::look_at_rh(self.eye, self.target, self.up);
-        // 2.
+        // proj is a matrix, which transforms coordinates from view space to clip space
+        // (a, b, c)^T in view space -> proj * (a, b, c, 1)^T in clip space
         let proj = cgmath::perspective(cgmath::Deg(self.fovy), self.aspect, self.znear, self.zfar);
-
-        // 3.
-        return OPENGL_TO_WGPU_MATRIX * proj * view;
+        // return the combined matrix
+        // this matrix is used to transform coordinates from world space to clip space
+        // (a, b, c)^T in word space -> 
+        //  view * (a, b, c, 1)^T in view space -> 
+        //  proj * view (a, b, c, 1)^T in clip space(OpenGL clip space) -> 
+        //  wgpu clip space
+        return Self::OPENGL_TO_WGPU_MATRIX * proj * view;
     }
 }
 
 #[repr(C)]
-// This is so we can store this in a buffer
-#[derive(Debug, Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
+#[derive(Debug, Copy, Clone, Pod, Zeroable)]
 struct CameraUniform {
-    // We can't use cgmath with bytemuck directly, so we'll have
-    // to convert the Matrix4 into a 4x4 f32 array
     view_proj: [[f32; 4]; 4],
 }
 impl CameraUniform {
@@ -154,8 +157,10 @@ impl CameraController {
 
     fn update_camera(&self, camera: &mut Camera) {
         use cgmath::InnerSpace;
+        // a vector that points from the camera's eye to the camera's target
         let forward = camera.target - camera.eye;
         let forward_norm = forward.normalize();
+        // the distance between the camera's eye and target
         let forward_mag = forward.magnitude();
 
         // Prevents glitching when the camera gets too close to the
@@ -166,7 +171,7 @@ impl CameraController {
         if self.is_backward_pressed {
             camera.eye -= forward_norm * self.speed;
         }
-
+        // the vector pointing to the right direction of the camera
         let right = forward_norm.cross(camera.up);
 
         // Redo radius calc in case the forward/backward is pressed.
@@ -275,13 +280,11 @@ impl<'a> State<'a> {
             desired_maximum_frame_latency: 2,
             view_formats: vec![],
         };
-
         let clear_color = wgpu::Color::BLACK;
-
-
+        // load the texture
         let diffuse_bytes = include_bytes!("103540876_1.png");
         let diffuse_texture = texture::Texture::from_bytes(&device, &queue, diffuse_bytes, "aoi.png").unwrap();
-
+        // initiate texture bind group
         let texture_bind_group_layout = device.create_bind_group_layout(
             &wgpu::BindGroupLayoutDescriptor {
                 entries: &[
@@ -321,7 +324,7 @@ impl<'a> State<'a> {
                 label: Some("diffuse_bind_group"),
             }
         );
-
+        // initiate camera
         let camera = Camera {
             // position the camera 1 unit up and 2 units back
             // +z is out of the screen
@@ -336,8 +339,8 @@ impl<'a> State<'a> {
             zfar: 100.0,
         };
         let mut camera_uniform = CameraUniform::new();
-        camera_uniform.update_view_proj(&camera);
-        
+        camera_uniform.update_view_proj(&camera); // camera_uniform.view_proj stores the view projection matrix
+        // load view projection matrix to uniform buffer
         let camera_buffer = device.create_buffer_init(
             &wgpu::util::BufferInitDescriptor {
                 label: Some("Camera Buffer"),
@@ -345,6 +348,7 @@ impl<'a> State<'a> {
                 usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             }
         );
+        // initiate camera bind group
         let camera_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             entries: &[
                 wgpu::BindGroupLayoutEntry {
@@ -601,7 +605,6 @@ pub async fn run() {
                     window_id,
                 } if window_id == state.window().id() => {
                     if !state.input(event) {
-                        // UPDATED!
                         match event {
                             WindowEvent::CloseRequested
                             | WindowEvent::KeyboardInput {
@@ -621,11 +624,10 @@ pub async fn run() {
                             WindowEvent::RedrawRequested => {
                                 // This tells winit that we want another frame after this one
                                 state.window().request_redraw();
-
+                                // return if the surface is not configured
                                 if !surface_configured {
                                     return;
                                 }
-
                                 state.update();
                                 match state.render() {
                                     Ok(_) => {}

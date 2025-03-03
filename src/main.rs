@@ -114,15 +114,20 @@ pub async fn run(file: &str) {
     let blocks = arc_parser::parser::parser::read_file(file, true).unwrap().unwrap();
     let sphere = Sphere::new();
     let mut instances: Vec<Instance> = Vec::new();
-    // construct instances
+    // construct instances from the first block
     let block = blocks.get(0).unwrap();
+    let center_of_cell = cgmath::Vector3 {
+        x: block.crystal.x as f32 / 2.0,
+        y: block.crystal.y as f32 / 2.0,
+        z: block.crystal.z as f32 / 2.0,
+    };
     for i in 0..block.atoms.len() {
         let atom = block.atoms.get(i).unwrap();
         let position = cgmath::Vector3 {
             x: atom.coordinate.0 as f32,
             y: atom.coordinate.1 as f32,
             z: atom.coordinate.2 as f32,
-        };
+        } - center_of_cell;
         let rotation = if position.is_zero() {
             cgmath::Quaternion::from_axis_angle(cgmath::Vector3::unit_z(), cgmath::Deg(0.0))
         } else {

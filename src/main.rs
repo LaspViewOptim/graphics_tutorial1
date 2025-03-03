@@ -1,11 +1,13 @@
-use graphics_tutorial1_lib::{Vertex, State};
+use graphics_tutorial1_lib::{Vertex, State, Instance};
 use winit::{event::{ElementState, Event, KeyEvent, WindowEvent}, event_loop::EventLoop, keyboard::{KeyCode, PhysicalKey}, window::WindowBuilder};
+use cgmath::{self, Zero, Rotation3, InnerSpace};
+use arc_parser;
 
-struct Atom {
+struct Sphere {
     verticies: Vec<Vertex>,
     indices: Vec<u16>,
 }
-impl Atom {
+impl Sphere {
     pub fn new() -> Self {
         // Parameters for sphere generation
         let radius = 0.5; // to match scale of existing vertices
@@ -75,7 +77,7 @@ impl Atom {
 }
 
 #[cfg_attr(target_arch="wasm32", wasm_bindgen(start))]
-pub async fn run() {
+pub async fn run(file: &str) {
     cfg_if::cfg_if! {
         if #[cfg(target_arch = "wasm32")] {
             std::panic::set_hook(Box::new(console_error_panic_hook::hook));
@@ -108,9 +110,32 @@ pub async fn run() {
         let _ = window.request_inner_size(PhysicalSize::new(450, 400));
     }
 
+    // read from input file
+    let blocks = arc_parser::parser::parser::read_file(file, true).unwrap().unwrap();
+    let sphere = Sphere::new();
+    let mut instances: Vec<Instance> = Vec::new();
+    // construct instances
+    let block = blocks.get(0).unwrap();
+    for i in 0..block.atoms.len() {
+        let atom = block.atoms.get(i).unwrap();
+        let position = cgmath::Vector3 {
+            x: atom.coordinate.0 as f32,
+            y: atom.coordinate.1 as f32,
+            z: atom.coordinate.2 as f32,
+        };
+        let rotation = if position.is_zero() {
+            cgmath::Quaternion::from_axis_angle(cgmath::Vector3::unit_z(), cgmath::Deg(0.0))
+        } else {
+            cgmath::Quaternion::from_axis_angle(position.normalize(), cgmath::Deg(45.0))
+        };
+
+        instances.push(Instance {
+            position,
+            rotation,
+        });
+    }
     // State::new uses async code, so we're going to wait for it to finish
-    let atom = Atom::new();
-    let mut state = State::new(&window, &atom.verticies, &atom.indices).await;
+    let mut state = State::new(&window, &sphere.verticies, &sphere.indices, instances).await;
     let mut surface_configured = false;
 
     event_loop
@@ -174,5 +199,8 @@ pub async fn run() {
 }
 
 fn main() {
-    pollster::block_on(run());
+    // get the file name from the first argument passed to the program
+    let args: Vec<String> = std::env::args().collect();
+    let file = &args[1];
+    pollster::block_on(run(&file));
 }

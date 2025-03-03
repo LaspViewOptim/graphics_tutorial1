@@ -191,9 +191,9 @@ impl CameraController {
     }
 }
 
-struct Instance {
-    position: cgmath::Vector3<f32>,
-    rotation: cgmath::Quaternion<f32>,
+pub struct Instance {
+    pub position: cgmath::Vector3<f32>,
+    pub rotation: cgmath::Quaternion<f32>,
 }
 #[repr(C)]
 #[derive(Debug, Copy, Clone, Pod, Zeroable)]
@@ -271,7 +271,7 @@ pub struct State<'a> {
 }
 
 impl<'a> State<'a> {
-    pub async fn new(window: &'a Window, verticies: &Vec<Vertex>, indices: &Vec<u16>) -> State<'a> {
+    pub async fn new(window: &'a Window, verticies: &Vec<Vertex>, indices: &Vec<u16>, instances: Vec<Instance>) -> State<'a> {
         let size = window.inner_size();
 
         // The instance is a handle to our GPU
@@ -429,23 +429,7 @@ impl<'a> State<'a> {
             ],
             label: Some("camera_bind_group"),
         });
-        const NUM_INSTANCES_PER_ROW: u32 = 10;
-        const INSTANCE_DISPLACEMENT: cgmath::Vector3<f32> = cgmath::Vector3::new(NUM_INSTANCES_PER_ROW as f32 * 0.5, 0.0, NUM_INSTANCES_PER_ROW as f32 * 0.5);
 
-        let instances = (0..NUM_INSTANCES_PER_ROW).flat_map(|z| {
-            (0..NUM_INSTANCES_PER_ROW).map(move |x| {
-                let position = cgmath::Vector3 {x: x as f32, y: 0.0, z: z as f32} - INSTANCE_DISPLACEMENT;
-                let rotation = if position.is_zero() {
-                    cgmath::Quaternion::from_axis_angle(cgmath::Vector3::unit_z(), cgmath::Deg(0.0))
-                } else {
-                    cgmath::Quaternion::from_axis_angle(position.normalize(), cgmath::Deg(45.0))
-                };
-
-                Instance {
-                    position, rotation
-                }
-            })
-        }).collect::<Vec<_>>();
         // initiate instance buffer
         let instance_data = instances.iter().map(Instance::to_raw).collect::<Vec<_>>();
         let instance_buffer = device.create_buffer_init(
@@ -698,7 +682,23 @@ pub async fn run() {
     }
 
     // State::new uses async code, so we're going to wait for it to finish
-    let mut state = State::new(&window, &VERTICES.to_vec(), &INDICIES.to_vec()).await;
+    const NUM_INSTANCES_PER_ROW: u32 = 10;
+    const INSTANCE_DISPLACEMENT: cgmath::Vector3<f32> = cgmath::Vector3::new(NUM_INSTANCES_PER_ROW as f32 * 0.5, 0.0, NUM_INSTANCES_PER_ROW as f32 * 0.5);
+    let instances = (0..NUM_INSTANCES_PER_ROW).flat_map(|z| {
+        (0..NUM_INSTANCES_PER_ROW).map(move |x| {
+            let position = cgmath::Vector3 {x: x as f32, y: 0.0, z: z as f32} - INSTANCE_DISPLACEMENT;
+            let rotation = if position.is_zero() {
+                cgmath::Quaternion::from_axis_angle(cgmath::Vector3::unit_z(), cgmath::Deg(0.0))
+            } else {
+                cgmath::Quaternion::from_axis_angle(position.normalize(), cgmath::Deg(45.0))
+            };
+
+            Instance {
+                position, rotation
+            }
+        })
+    }).collect::<Vec<_>>();
+    let mut state = State::new(&window, &VERTICES.to_vec(), &INDICIES.to_vec(), instances).await;
     let mut surface_configured = false;
 
     event_loop

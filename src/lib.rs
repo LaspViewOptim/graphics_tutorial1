@@ -1,5 +1,7 @@
 use std::iter;
+
 use bytemuck::{Pod, Zeroable};
+use arc_parser;
 mod texture;
 
 #[cfg(target_arch="wasm32")]
@@ -242,6 +244,79 @@ impl InstanceRaw {
         }
     }
 }
+
+struct Sphere {
+    verticies: Vec<Vertex>,
+    indices: Vec<u16>,
+}
+impl Sphere {
+    pub fn new() -> Self {
+        // Parameters for sphere generation
+        let radius = 0.5; // to match scale of existing vertices
+        let sectors = 32; // horizontal slices
+        let stacks = 16;  // vertical stacks
+        
+        let mut verticies = Vec::new();
+        let mut indices = Vec::new();
+        
+        // Generate vertices
+        for i in 0..=stacks {
+            let phi = std::f32::consts::PI * i as f32 / stacks as f32;
+            let y = radius * phi.cos();
+            let r = radius * phi.sin(); // radius at this stack
+            
+            for j in 0..sectors {
+                let theta = 2.0 * std::f32::consts::PI * j as f32 / sectors as f32;
+                
+                // Vertex position
+                let x = r * theta.cos();
+                let z = r * theta.sin();
+                
+                // Texture coordinates
+                let u = j as f32 / sectors as f32;
+                let v = i as f32 / stacks as f32;
+                
+                verticies.push(Vertex {
+                    position: [x, y, z],
+                    tex_coords: [u, v],
+                });
+            }
+        }
+        
+        // Generate indices
+        for i in 0..stacks {
+            let row1 = i * sectors;
+            let row2 = (i + 1) * sectors;
+            
+            for j in 0..sectors {
+                let next_j = (j + 1) % sectors;
+                
+                if i == 0 { // North pole cap
+                    indices.push((row1 + j) as u16);
+                    indices.push((row2 + next_j) as u16);
+                    indices.push((row2 + j) as u16);
+                } else if i == stacks - 1 { // South pole cap
+                    indices.push((row1 + j) as u16);
+                    indices.push((row1 + next_j) as u16);
+                    indices.push((row2 + j) as u16);
+                } else { // Body (quad formed by two triangles)
+                    indices.push((row1 + j) as u16);
+                    indices.push((row1 + next_j) as u16);
+                    indices.push((row2 + j) as u16);
+                    
+                    indices.push((row1 + next_j) as u16);
+                    indices.push((row2 + next_j) as u16);
+                    indices.push((row2 + j) as u16);
+                }
+            }
+        }
+        
+        Self {
+            verticies,
+            indices,
+        }
+    }
+}
 pub struct State<'a> {
     surface: wgpu::Surface<'a>,
     device: wgpu::Device,
@@ -271,7 +346,8 @@ pub struct State<'a> {
 }
 
 impl<'a> State<'a> {
-    pub async fn new(window: &'a Window, verticies: &Vec<Vertex>, indices: &Vec<u16>, instances: Vec<Instance>) -> State<'a> {
+
+    pub async fn from_structure_block(window: &'a Window, block: &arc_parser::modules::structures::StructureBlock) -> State<'a> {
         let size = window.inner_size();
 
         // The instance is a handle to our GPU
@@ -430,6 +506,34 @@ impl<'a> State<'a> {
             label: Some("camera_bind_group"),
         });
 
+    // read from input file
+    let sphere = Sphere::new();
+    let mut instances: Vec<Instance> = Vec::new();
+    // construct instances from the first block
+    let center_of_cell = cgmath::Vector3 {
+        x: block.crystal.x as f32 / 2.0,
+        y: block.crystal.y as f32 / 2.0,
+        z: block.crystal.z as f32 / 2.0,
+    };
+    for i in 0..block.atoms.len() {
+        let atom = block.atoms.get(i).unwrap();
+        let position = cgmath::Vector3 {
+            x: atom.coordinate.0 as f32,
+            y: atom.coordinate.1 as f32,
+            z: atom.coordinate.2 as f32,
+        } - center_of_cell;
+        let rotation = if position.is_zero() {
+            cgmath::Quaternion::from_axis_angle(cgmath::Vector3::unit_z(), cgmath::Deg(0.0))
+        } else {
+            cgmath::Quaternion::from_axis_angle(position.normalize(), cgmath::Deg(45.0))
+        };
+
+        instances.push(Instance {
+            position,
+            rotation,
+        });
+    }
+
         // initiate instance buffer
         let instance_data = instances.iter().map(Instance::to_raw).collect::<Vec<_>>();
         let instance_buffer = device.create_buffer_init(
@@ -516,19 +620,19 @@ impl<'a> State<'a> {
         let vertex_buffer = device.create_buffer_init(
             &wgpu::util::BufferInitDescriptor {
                 label: Some("Vertex Buffer"),
-                contents: bytemuck::cast_slice(verticies),
+                contents: bytemuck::cast_slice(&sphere.verticies),
                 usage: wgpu::BufferUsages::VERTEX,
             }
         );
-        let num_verticies = verticies.len() as u32;
+        let num_verticies = sphere.verticies.len() as u32;
         let index_buffer = device.create_buffer_init(
             &wgpu::util::BufferInitDescriptor {
                 label: Some("Index Buffer"),
-                contents: bytemuck::cast_slice(&indices),
+                contents: bytemuck::cast_slice(&sphere.indices),
                 usage: wgpu::BufferUsages::INDEX,
             }
         );
-        let num_indicies = indices.len() as u32;
+        let num_indicies = sphere.indices.len() as u32;
 
         Self {
             surface,
@@ -648,7 +752,7 @@ impl<'a> State<'a> {
 }
 
 #[cfg_attr(target_arch="wasm32", wasm_bindgen(start))]
-pub async fn run() {
+pub async fn show_strucutre(filename: &str) {
     cfg_if::cfg_if! {
         if #[cfg(target_arch = "wasm32")] {
             std::panic::set_hook(Box::new(console_error_panic_hook::hook));
@@ -681,24 +785,9 @@ pub async fn run() {
         let _ = window.request_inner_size(PhysicalSize::new(450, 400));
     }
 
-    // State::new uses async code, so we're going to wait for it to finish
-    const NUM_INSTANCES_PER_ROW: u32 = 10;
-    const INSTANCE_DISPLACEMENT: cgmath::Vector3<f32> = cgmath::Vector3::new(NUM_INSTANCES_PER_ROW as f32 * 0.5, 0.0, NUM_INSTANCES_PER_ROW as f32 * 0.5);
-    let instances = (0..NUM_INSTANCES_PER_ROW).flat_map(|z| {
-        (0..NUM_INSTANCES_PER_ROW).map(move |x| {
-            let position = cgmath::Vector3 {x: x as f32, y: 0.0, z: z as f32} - INSTANCE_DISPLACEMENT;
-            let rotation = if position.is_zero() {
-                cgmath::Quaternion::from_axis_angle(cgmath::Vector3::unit_z(), cgmath::Deg(0.0))
-            } else {
-                cgmath::Quaternion::from_axis_angle(position.normalize(), cgmath::Deg(45.0))
-            };
-
-            Instance {
-                position, rotation
-            }
-        })
-    }).collect::<Vec<_>>();
-    let mut state = State::new(&window, &VERTICES.to_vec(), &INDICIES.to_vec(), instances).await;
+    // read from file
+    let block = arc_parser::parser::parser::read_file(filename, true).unwrap().unwrap();
+    let mut state = State::from_structure_block(&window, &block[0]).await;
     let mut surface_configured = false;
 
     event_loop

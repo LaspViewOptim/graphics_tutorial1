@@ -176,19 +176,25 @@ impl CameraController {
     }
 }
 
-pub struct Instance {
-    pub position: cgmath::Vector3<f32>,
-    pub rotation: cgmath::Quaternion<f32>,
+struct Instance {
+    position: cgmath::Vector3<f32>,
+    rotation: cgmath::Quaternion<f32>,
+    tex_offset: cgmath::Vector2<f32>,
+    tex_scale: cgmath::Vector2<f32>,
 }
 #[repr(C)]
 #[derive(Debug, Copy, Clone, Pod, Zeroable)]
 struct InstanceRaw {
     model: [[f32; 4]; 4],
+    tex_offset: [f32; 2],
+    tex_scale: [f32; 2],
 }
 impl Instance {
     fn to_raw(&self) -> InstanceRaw {
         InstanceRaw {
             model: (cgmath::Matrix4::from_translation(self.position) * cgmath::Matrix4::from(self.rotation)).into(),
+            tex_offset: self.tex_offset.into(),
+            tex_scale: self.tex_scale.into(),
         }
     }
 }
@@ -222,6 +228,16 @@ impl InstanceRaw {
                     offset: mem::size_of::<[f32; 12]>() as wgpu::BufferAddress,
                     shader_location: 8,
                     format: wgpu::VertexFormat::Float32x4,
+                },
+                wgpu::VertexAttribute {
+                    offset: mem::size_of::<[f32; 16]>() as wgpu::BufferAddress,
+                    shader_location: 9,
+                    format: wgpu::VertexFormat::Float32x2,
+                },
+                wgpu::VertexAttribute {
+                    offset: mem::size_of::<[f32; 18]>() as wgpu::BufferAddress,
+                    shader_location: 10,
+                    format: wgpu::VertexFormat::Float32x2,
                 },
             ]
         }
@@ -510,10 +526,16 @@ impl<'a> State<'a> {
         } else {
             cgmath::Quaternion::from_axis_angle(position.normalize(), cgmath::Deg(45.0))
         };
-
+        let (tex_offset, tex_scale) = match atom.element.as_str() {
+            "O" => ([0.0, 0.0], [0.5, 1.0]),
+            "Si" => ([0.5, 0.0], [0.5, 1.0]),
+            _ => ([0.0, 0.0], [0.5, 1.0]),
+        };
         instances.push(Instance {
             position,
             rotation,
+            tex_offset: tex_offset.into(),
+            tex_scale: tex_scale.into(),
         });
     }
 

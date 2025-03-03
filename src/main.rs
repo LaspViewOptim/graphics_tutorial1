@@ -1,23 +1,79 @@
 use graphics_tutorial1_lib::{Vertex, State};
 use winit::{event::{ElementState, Event, KeyEvent, WindowEvent}, event_loop::EventLoop, keyboard::{KeyCode, PhysicalKey}, window::WindowBuilder};
 
-pub fn get_vertices() -> Vec<Vertex> {
-    vec![
-        Vertex { position: [-0.0868241, 0.49240386, 0.0], tex_coords: [0.4131759, 0.00759614], }, // A
-        Vertex { position: [-0.49513406, 0.06958647, 0.0], tex_coords: [0.0048659444, 0.43041354], }, // B
-        Vertex { position: [-0.21918549, -0.44939706, 0.0], tex_coords: [0.28081453, 0.949397], }, // C
-        Vertex { position: [0.35966998, -0.3473291, 0.0], tex_coords: [0.85967, 0.84732914], }, // D
-        Vertex { position: [0.44147372, 0.2347359, 0.0], tex_coords: [0.9414737, 0.2652641], }, // E
-    ]
+struct Atom {
+    verticies: Vec<Vertex>,
+    indices: Vec<u16>,
+}
+impl Atom {
+    pub fn new() -> Self {
+        // Parameters for sphere generation
+        let radius = 0.5; // to match scale of existing vertices
+        let sectors = 32; // horizontal slices
+        let stacks = 16;  // vertical stacks
+        
+        let mut verticies = Vec::new();
+        let mut indices = Vec::new();
+        
+        // Generate vertices
+        for i in 0..=stacks {
+            let phi = std::f32::consts::PI * i as f32 / stacks as f32;
+            let y = radius * phi.cos();
+            let r = radius * phi.sin(); // radius at this stack
+            
+            for j in 0..sectors {
+                let theta = 2.0 * std::f32::consts::PI * j as f32 / sectors as f32;
+                
+                // Vertex position
+                let x = r * theta.cos();
+                let z = r * theta.sin();
+                
+                // Texture coordinates
+                let u = j as f32 / sectors as f32;
+                let v = i as f32 / stacks as f32;
+                
+                verticies.push(Vertex {
+                    position: [x, y, z],
+                    tex_coords: [u, v],
+                });
+            }
+        }
+        
+        // Generate indices
+        for i in 0..stacks {
+            let row1 = i * sectors;
+            let row2 = (i + 1) * sectors;
+            
+            for j in 0..sectors {
+                let next_j = (j + 1) % sectors;
+                
+                if i == 0 { // North pole cap
+                    indices.push((row1 + j) as u16);
+                    indices.push((row2 + next_j) as u16);
+                    indices.push((row2 + j) as u16);
+                } else if i == stacks - 1 { // South pole cap
+                    indices.push((row1 + j) as u16);
+                    indices.push((row1 + next_j) as u16);
+                    indices.push((row2 + j) as u16);
+                } else { // Body (quad formed by two triangles)
+                    indices.push((row1 + j) as u16);
+                    indices.push((row1 + next_j) as u16);
+                    indices.push((row2 + j) as u16);
+                    
+                    indices.push((row1 + next_j) as u16);
+                    indices.push((row2 + next_j) as u16);
+                    indices.push((row2 + j) as u16);
+                }
+            }
+        }
+        
+        Self {
+            verticies,
+            indices,
+        }
+    }
 }
 
-pub fn get_indices() -> Vec<u16> {
-    vec![
-        0, 1, 4, // ABE
-        1, 2, 4, // BCE
-        2, 3, 4, // CDE
-    ]
-}
 #[cfg_attr(target_arch="wasm32", wasm_bindgen(start))]
 pub async fn run() {
     cfg_if::cfg_if! {
@@ -53,7 +109,8 @@ pub async fn run() {
     }
 
     // State::new uses async code, so we're going to wait for it to finish
-    let mut state = State::new(&window, &get_vertices(), &get_indices()).await;
+    let atom = Atom::new();
+    let mut state = State::new(&window, &atom.verticies, &atom.indices).await;
     let mut surface_configured = false;
 
     event_loop

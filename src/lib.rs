@@ -1,5 +1,4 @@
 use std::iter;
-
 use bytemuck::{Pod, Zeroable};
 use arc_parser;
 mod texture;
@@ -7,7 +6,7 @@ mod texture;
 #[cfg(target_arch="wasm32")]
 use wasm_bindgen::prelude::*;
 
-use wgpu::util::DeviceExt;
+use wgpu::{core::{device::queue, instance}, util::DeviceExt};
 use winit::{
     event::*,
     event_loop::EventLoop,
@@ -244,16 +243,13 @@ impl InstanceRaw {
     }
 }
 
+// Sphere generation (used for atoms)
 struct Sphere {
     verticies: Vec<Vertex>,
-    indices: Vec<u16>,
+    indices: Vec<u32>,
 }
 impl Sphere {
-    pub fn new() -> Self {
-        // Parameters for sphere generation
-        let radius = 0.5; // to match scale of existing vertices
-        let sectors = 32; // horizontal slices
-        let stacks = 16;  // vertical stacks
+    pub fn new(radius: f32, sectors: u32, stacks: u32) -> Self {
         
         let mut verticies = Vec::new();
         let mut indices = Vec::new();
@@ -291,21 +287,21 @@ impl Sphere {
                 let next_j = (j + 1) % sectors;
                 
                 if i == 0 { // North pole cap
-                    indices.push((row1 + j) as u16);
-                    indices.push((row2 + next_j) as u16);
-                    indices.push((row2 + j) as u16);
+                    indices.push((row1 + j) as u32);
+                    indices.push((row2 + next_j) as u32);
+                    indices.push((row2 + j) as u32);
                 } else if i == stacks - 1 { // South pole cap
-                    indices.push((row1 + j) as u16);
-                    indices.push((row1 + next_j) as u16);
-                    indices.push((row2 + j) as u16);
+                    indices.push((row1 + j) as u32);
+                    indices.push((row1 + next_j) as u32);
+                    indices.push((row2 + j) as u32);
                 } else { // Body (quad formed by two triangles)
-                    indices.push((row1 + j) as u16);
-                    indices.push((row1 + next_j) as u16);
-                    indices.push((row2 + j) as u16);
+                    indices.push((row1 + j) as u32);
+                    indices.push((row1 + next_j) as u32);
+                    indices.push((row2 + j) as u32);
                     
-                    indices.push((row1 + next_j) as u16);
-                    indices.push((row2 + next_j) as u16);
-                    indices.push((row2 + j) as u16);
+                    indices.push((row1 + next_j) as u32);
+                    indices.push((row2 + next_j) as u32);
+                    indices.push((row2 + j) as u32);
                 }
             }
         }
@@ -313,6 +309,190 @@ impl Sphere {
         Self {
             verticies,
             indices,
+        }
+    }
+}
+// Cylinder generation (used for bonds)
+struct Cylinder {
+    verticies: Vec<Vertex>,
+    indices: Vec<u32>,
+}
+impl Cylinder {
+    fn new(radius: f32, height: f32, segments: u32) -> Self {
+        let mut vertices = Vec::new();
+        let mut indices = Vec::new();
+        
+        // Center points for top and bottom faces
+        let top_center = vertices.len() as u32;
+        vertices.push(Vertex {
+            position: [0.0, height/2.0, 0.0],
+            tex_coords: [0.5, 0.5],
+        });
+        
+        let bottom_center = vertices.len() as u32;
+        vertices.push(Vertex {
+            position: [0.0, -height/2.0, 0.0],
+            tex_coords: [0.5, 0.5],
+        });
+        
+        // Add vertices for the circles at top and bottom
+        let top_start_idx = vertices.len() as u32;
+        for i in 0..segments {
+            let theta = 2.0 * std::f32::consts::PI * i as f32 / segments as f32;
+            let x = radius * theta.cos();
+            let z = radius * theta.sin();
+            
+            // Texture coordinates
+            let u = i as f32 / segments as f32;
+            
+            // Top circle vertex
+            vertices.push(Vertex {
+                position: [x, height/2.0, z],
+                tex_coords: [u, 0.0],
+            });
+        }
+        
+        // Bottom circle vertices
+        let bottom_start_idx = vertices.len() as u32;
+        for i in 0..segments {
+            let theta = 2.0 * std::f32::consts::PI * i as f32 / segments as f32;
+            let x = radius * theta.cos();
+            let z = radius * theta.sin();
+            
+            // Texture coordinates
+            let u = i as f32 / segments as f32;
+            
+            // Bottom circle vertex
+            vertices.push(Vertex {
+                position: [x, -height/2.0, z],
+                tex_coords: [u, 1.0],
+            });
+        }
+        
+        // Generate indices for triangles
+        for i in 0..segments {
+            let next_i = (i + 1) % segments;
+            
+            // Top face
+            indices.push(top_center);
+            indices.push(top_start_idx + i);
+            indices.push(top_start_idx + next_i);
+            
+            // Bottom face (reversed winding)
+            indices.push(bottom_center);
+            indices.push(bottom_start_idx + next_i);
+            indices.push(bottom_start_idx + i);
+            
+            // Side quads (two triangles per quad)
+            let top_current = top_start_idx + i;
+            let top_next = top_start_idx + next_i;
+            let bottom_current = bottom_start_idx + i;
+            let bottom_next = bottom_start_idx + next_i;
+            
+            // First triangle
+            indices.push(top_current);
+            indices.push(bottom_current);
+            indices.push(top_next);
+            
+            // Second triangle
+            indices.push(bottom_current);
+            indices.push(bottom_next);
+            indices.push(top_next);
+        }
+        
+        Self {
+            verticies: vertices,
+            indices,
+        }
+    }
+}
+
+// a wrapper for all objects in the scene
+struct RenderObject {
+    vertex_buffer: wgpu::Buffer,
+    num_verticies: u32,
+    index_buffer: wgpu::Buffer,
+    num_indicies: u32,
+    instances: Vec<Instance>,
+    instance_buffer: wgpu::Buffer,
+    object_type: ObjectType,
+}
+// types of objects in the scene
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum ObjectType {
+    Sphere,
+    Cylinder,
+}
+impl RenderObject {
+    fn new(
+        device: &wgpu::Device,
+        verticies: &[Vertex],
+        indicies: &[u32],
+        instances: Vec<Instance>,
+        object_type: ObjectType,
+    ) -> Self {
+        // vertex buffer
+        let vertex_buffer = device.create_buffer_init(
+            &wgpu::util::BufferInitDescriptor {
+                label: Some(&format!("{:?} Vertex Buffer", object_type)),
+                contents: bytemuck::cast_slice(verticies),
+                usage: wgpu::BufferUsages::VERTEX,
+            }
+        );
+        // index buffer
+        let index_buffer = device.create_buffer_init(
+            &wgpu::util::BufferInitDescriptor {
+                label: Some(&format!("{:?} Index Buffer", object_type)),
+                contents: bytemuck::cast_slice(indicies),
+                usage: wgpu::BufferUsages::INDEX,
+            }
+        );
+        // instance buffer
+        let instance_data = instances.iter().map(Instance::to_raw).collect::<Vec<_>>();
+        let instance_buffer = device.create_buffer_init(
+            &wgpu::util::BufferInitDescriptor {
+                label: Some(&format!("{:?} Instance Buffer", object_type)),
+                contents: bytemuck::cast_slice(&instance_data),
+                usage: wgpu::BufferUsages::VERTEX,
+            }
+        );
+
+        Self {
+            vertex_buffer,
+            num_verticies: verticies.len() as u32,
+            index_buffer,
+            num_indicies: indicies.len() as u32,
+            instances,
+            instance_buffer,
+            object_type,
+        }
+    }
+
+    fn update_instances(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        instances: Vec<Instance>,
+    ) {
+        self.instances = instances;
+        let instance_data = self.instances.iter().map(Instance::to_raw).collect::<Vec<_>>();
+        
+        if instance_data.len() * std::mem::size_of::<Instance>() <= self.instance_buffer.size() as usize {
+            // if the current buffer is large enough, reuse the current buffer
+            queue.write_buffer(
+                &self.instance_buffer,
+                0,
+                bytemuck::cast_slice(&instance_data),
+            );
+        } else {
+            // if the current buffer is not large enough, create a new buffer
+            self.instance_buffer = device.create_buffer_init(
+                &wgpu::util::BufferInitDescriptor {
+                    label: Some(&format!("{:?} Instance Buffer", self.object_type)),
+                    contents: bytemuck::cast_slice(&instance_data),
+                    usage: wgpu::BufferUsages::VERTEX,
+                }
+            );
         }
     }
 }
@@ -328,20 +508,14 @@ pub struct State<'a> {
     // unsafe references to the window's resources.
     window: &'a Window,
     render_pipeline: wgpu::RenderPipeline,
-    vertex_buffer: wgpu::Buffer,
-    num_verticies: u32,
-    index_buffer: wgpu::Buffer,
-    num_indicies: u32,
     diffuse_bind_group: wgpu::BindGroup,
-    diffuse_texture: texture::Texture,
     camera: Camera,
     camera_uniform: CameraUniform,
     camera_buffer: wgpu::Buffer,
     camera_bind_group: wgpu::BindGroup,
     camera_controller: CameraController,
-    instances: Vec<Instance>,
-    instance_buffer: wgpu::Buffer,
     depth_texture: texture::Texture,
+    render_objects: Vec<RenderObject>,
 }
 
 impl<'a> State<'a> {
@@ -413,7 +587,7 @@ impl<'a> State<'a> {
         let clear_color = wgpu::Color::BLACK;
         // load the texture
         let diffuse_bytes = include_bytes!("texture.png");
-        let diffuse_texture = texture::Texture::from_bytes(&device, &queue, diffuse_bytes, "aoi.png").unwrap();
+        let diffuse_texture = texture::Texture::from_bytes(&device, &queue, diffuse_bytes, "texture.png").unwrap();
         // initiate texture bind group
         let texture_bind_group_layout = device.create_bind_group_layout(
             &wgpu::BindGroupLayoutDescriptor {
@@ -506,8 +680,8 @@ impl<'a> State<'a> {
         });
 
     // read from input file
-    let sphere = Sphere::new();
-    let mut instances: Vec<Instance> = Vec::new();
+    let sphere = Sphere::new(0.5, 32, 16);
+    let mut sphere_instances: Vec<Instance> = Vec::new();
     // construct instances from the first block
     let center_of_cell = cgmath::Vector3 {
         x: block.crystal.x as f32 / 2.0,
@@ -531,23 +705,13 @@ impl<'a> State<'a> {
             "Si" => ([2.0/11.0, 1.0/11.0], [1.0/11.0, 1.0/11.0]),
             _ => ([0.0, 0.0], [1.0/11.0, 1.0/11.0]),
         };
-        instances.push(Instance {
+        sphere_instances.push(Instance {
             position,
             rotation,
             tex_offset: tex_offset.into(),
             tex_scale: tex_scale.into(),
         });
     }
-
-        // initiate instance buffer
-        let instance_data = instances.iter().map(Instance::to_raw).collect::<Vec<_>>();
-        let instance_buffer = device.create_buffer_init(
-            &wgpu::util::BufferInitDescriptor {
-                label: Some("Instance Buffer"),
-                contents: bytemuck::cast_slice(&instance_data),
-                usage: wgpu::BufferUsages::VERTEX,
-            }
-        );
 
         // initiate a depth texture
         let depth_texture = texture::Texture::create_depth_texture(&device, &config, "depth_texture");
@@ -621,23 +785,14 @@ impl<'a> State<'a> {
             // Useful for optimizing shader compilation on Android
             cache: None,
         });
-        // initialize vertex_buffer and index_buffer
-        let vertex_buffer = device.create_buffer_init(
-            &wgpu::util::BufferInitDescriptor {
-                label: Some("Vertex Buffer"),
-                contents: bytemuck::cast_slice(&sphere.verticies),
-                usage: wgpu::BufferUsages::VERTEX,
-            }
-        );
-        let num_verticies = sphere.verticies.len() as u32;
-        let index_buffer = device.create_buffer_init(
-            &wgpu::util::BufferInitDescriptor {
-                label: Some("Index Buffer"),
-                contents: bytemuck::cast_slice(&sphere.indices),
-                usage: wgpu::BufferUsages::INDEX,
-            }
-        );
-        let num_indicies = sphere.indices.len() as u32;
+        let mut render_objects = Vec::new();
+        render_objects.push(RenderObject::new(
+            &device,
+            &sphere.verticies,
+            &sphere.indices,
+            sphere_instances,
+            ObjectType::Sphere,
+        ));
 
         Self {
             surface,
@@ -648,20 +803,14 @@ impl<'a> State<'a> {
             clear_color,
             window,
             render_pipeline,
-            vertex_buffer,
-            num_verticies,
-            index_buffer,
-            num_indicies,
             diffuse_bind_group,
-            diffuse_texture,
             camera,
             camera_uniform,
             camera_buffer,
             camera_bind_group,
             camera_controller,
-            instances,
-            instance_buffer,
             depth_texture,
+            render_objects,
         }
     }
 
@@ -743,10 +892,12 @@ impl<'a> State<'a> {
             render_pass.set_pipeline(&self.render_pipeline);
             render_pass.set_bind_group(0, Some(&self.diffuse_bind_group), &[]);
             render_pass.set_bind_group(1, &self.camera_bind_group, &[]);
-            render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
-            render_pass.set_vertex_buffer(1, self.instance_buffer.slice(..));
-            render_pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
-            render_pass.draw_indexed(0..self.num_indicies, 0, 0..self.instances.len() as _);
+            for object in &self.render_objects {
+                render_pass.set_vertex_buffer(0, object.vertex_buffer.slice(..));
+                render_pass.set_vertex_buffer(1, object.instance_buffer.slice(..));
+                render_pass.set_index_buffer(object.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
+                render_pass.draw_indexed(0..object.num_indicies, 0, 0..object.instances.len() as _);
+            }
         }
 
         self.queue.submit(iter::once(encoder.finish()));

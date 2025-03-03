@@ -412,7 +412,7 @@ impl<'a> State<'a> {
         };
         let clear_color = wgpu::Color::BLACK;
         // load the texture
-        let diffuse_bytes = include_bytes!("103540876_1.png");
+        let diffuse_bytes = include_bytes!("texture.png");
         let diffuse_texture = texture::Texture::from_bytes(&device, &queue, diffuse_bytes, "aoi.png").unwrap();
         // initiate texture bind group
         let texture_bind_group_layout = device.create_bind_group_layout(
@@ -527,9 +527,9 @@ impl<'a> State<'a> {
             cgmath::Quaternion::from_axis_angle(position.normalize(), cgmath::Deg(45.0))
         };
         let (tex_offset, tex_scale) = match atom.element.as_str() {
-            "O" => ([0.0, 0.0], [0.5, 1.0]),
-            "Si" => ([0.5, 0.0], [0.5, 1.0]),
-            _ => ([0.0, 0.0], [0.5, 1.0]),
+            "O" => ([7.0/11.0, 0.0], [1.0/11.0, 1.0/11.0]),
+            "Si" => ([2.0/11.0, 1.0/11.0], [1.0/11.0, 1.0/11.0]),
+            _ => ([0.0, 0.0], [1.0/11.0, 1.0/11.0]),
         };
         instances.push(Instance {
             position,

@@ -16,9 +16,9 @@ use cgmath::prelude::*;
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Pod, Zeroable)]
-struct Vertex {
-    position: [f32; 3],
-    tex_coords: [f32; 2],
+pub struct Vertex {
+    pub position: [f32; 3],
+    pub tex_coords: [f32; 2],
 }
 
 impl Vertex {
@@ -242,12 +242,12 @@ impl InstanceRaw {
         }
     }
 }
-struct State<'a> {
+pub struct State<'a> {
     surface: wgpu::Surface<'a>,
     device: wgpu::Device,
     queue: wgpu::Queue,
     config: wgpu::SurfaceConfiguration,
-    size: winit::dpi::PhysicalSize<u32>,
+    pub size: winit::dpi::PhysicalSize<u32>,
     clear_color: wgpu::Color,
     // The window must be declared after the surface so
     // it gets dropped after it as the surface contains
@@ -271,7 +271,7 @@ struct State<'a> {
 }
 
 impl<'a> State<'a> {
-    async fn new(window: &'a Window) -> State<'a> {
+    pub async fn new(window: &'a Window, verticies: &Vec<Vertex>, indices: &Vec<u16>) -> State<'a> {
         let size = window.inner_size();
 
         // The instance is a handle to our GPU
@@ -532,19 +532,19 @@ impl<'a> State<'a> {
         let vertex_buffer = device.create_buffer_init(
             &wgpu::util::BufferInitDescriptor {
                 label: Some("Vertex Buffer"),
-                contents: bytemuck::cast_slice(VERTICES),
+                contents: bytemuck::cast_slice(verticies),
                 usage: wgpu::BufferUsages::VERTEX,
             }
         );
-        let num_verticies = VERTICES.len() as u32;
+        let num_verticies = verticies.len() as u32;
         let index_buffer = device.create_buffer_init(
             &wgpu::util::BufferInitDescriptor {
                 label: Some("Index Buffer"),
-                contents: bytemuck::cast_slice(INDICIES),
+                contents: bytemuck::cast_slice(&indices),
                 usage: wgpu::BufferUsages::INDEX,
             }
         );
-        let num_indicies = INDICIES.len() as u32;
+        let num_indicies = indices.len() as u32;
 
         Self {
             surface,
@@ -572,7 +572,7 @@ impl<'a> State<'a> {
         }
     }
 
-    fn window(&self) -> &Window {
+    pub fn window(&self) -> &Window {
         &self.window
     }
 
@@ -587,7 +587,7 @@ impl<'a> State<'a> {
     }
 
     #[allow(unused_variables)]
-    fn input(&mut self, event: &WindowEvent) -> bool {
+    pub fn input(&mut self, event: &WindowEvent) -> bool {
         match event {
             WindowEvent::CursorMoved { position, .. } => {
                 self.clear_color = wgpu::Color {
@@ -602,13 +602,13 @@ impl<'a> State<'a> {
         }
     }
 
-    fn update(&mut self) {
+    pub fn update(&mut self) {
         self.camera_controller.update_camera(&mut self.camera);
         self.camera_uniform.update_view_proj(&self.camera);
         self.queue.write_buffer(&self.camera_buffer, 0, bytemuck::cast_slice(&[self.camera_uniform]));
     }
 
-    fn render(&mut self) -> Result<(), wgpu::SurfaceError> {
+    pub fn render(&mut self) -> Result<(), wgpu::SurfaceError> {
         let output: wgpu::SurfaceTexture = self.surface.get_current_texture()?;
         let view = output
             .texture
@@ -698,7 +698,7 @@ pub async fn run() {
     }
 
     // State::new uses async code, so we're going to wait for it to finish
-    let mut state = State::new(&window).await;
+    let mut state = State::new(&window, &VERTICES.to_vec(), &INDICIES.to_vec()).await;
     let mut surface_configured = false;
 
     event_loop

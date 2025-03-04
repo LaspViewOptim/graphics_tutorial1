@@ -6,7 +6,7 @@ mod texture;
 #[cfg(target_arch="wasm32")]
 use wasm_bindgen::prelude::*;
 
-use wgpu::{core::{device::queue, instance}, util::DeviceExt};
+use wgpu::util::DeviceExt;
 use winit::{
     event::*,
     event_loop::EventLoop,
@@ -178,6 +178,7 @@ impl CameraController {
 struct Instance {
     position: cgmath::Vector3<f32>,
     rotation: cgmath::Quaternion<f32>,
+    scale: cgmath::Vector3<f32>,
     tex_offset: cgmath::Vector2<f32>,
     tex_scale: cgmath::Vector2<f32>,
 }
@@ -190,8 +191,10 @@ struct InstanceRaw {
 }
 impl Instance {
     fn to_raw(&self) -> InstanceRaw {
+        let scale = cgmath::Matrix4::from_nonuniform_scale(self.scale.x, self.scale.y, self.scale.z);
+        let model = cgmath::Matrix4::from_translation(self.position) * cgmath::Matrix4::from(self.rotation) * scale;
         InstanceRaw {
-            model: (cgmath::Matrix4::from_translation(self.position) * cgmath::Matrix4::from(self.rotation)).into(),
+            model: model.into(),
             tex_offset: self.tex_offset.into(),
             tex_scale: self.tex_scale.into(),
         }
@@ -679,39 +682,192 @@ impl<'a> State<'a> {
             label: Some("camera_bind_group"),
         });
 
-    // read from input file
-    let sphere = Sphere::new(0.5, 32, 16);
-    let mut sphere_instances: Vec<Instance> = Vec::new();
-    // construct instances from the first block
-    let center_of_cell = cgmath::Vector3 {
-        x: block.crystal.x as f32 / 2.0,
-        y: block.crystal.y as f32 / 2.0,
-        z: block.crystal.z as f32 / 2.0,
-    };
-    for i in 0..block.atoms.len() {
-        let atom = block.atoms.get(i).unwrap();
-        let position = cgmath::Vector3 {
-            x: atom.coordinate.0 as f32,
-            y: atom.coordinate.1 as f32,
-            z: atom.coordinate.2 as f32,
-        } - center_of_cell;
-        let rotation = if position.is_zero() {
-            cgmath::Quaternion::from_axis_angle(cgmath::Vector3::unit_z(), cgmath::Deg(0.0))
-        } else {
-            cgmath::Quaternion::from_axis_angle(position.normalize(), cgmath::Deg(45.0))
+        // initiate sphere for atoms
+        let sphere = Sphere::new(1.0, 32, 16);
+        let mut sphere_instances: Vec<Instance> = Vec::new();
+        // initiate cylinder for bonds
+        let cylinder = Cylinder::new(1.0, 1.0, 16);
+        let mut cylinder_instances: Vec<Instance> = Vec::new();
+        // calcualte the center of cell
+        let center_of_cell = cgmath::Vector3 {
+            x: block.crystal.x as f32 / 2.0,
+            y: block.crystal.y as f32 / 2.0,
+            z: block.crystal.z as f32 / 2.0,
         };
-        let (tex_offset, tex_scale) = match atom.element.as_str() {
-            "O" => ([7.0/11.0, 0.0], [1.0/11.0, 1.0/11.0]),
-            "Si" => ([2.0/11.0, 1.0/11.0], [1.0/11.0, 1.0/11.0]),
-            _ => ([0.0, 0.0], [1.0/11.0, 1.0/11.0]),
+        // initiate atom instances
+        for i in 0..block.atoms.len() {
+            let atom = block.atoms.get(i).unwrap();
+            let position = cgmath::Vector3 {
+                x: atom.coordinate.0 as f32,
+                y: atom.coordinate.1 as f32,
+                z: atom.coordinate.2 as f32,
+            } - center_of_cell;
+            let rotation = if position.is_zero() {
+                cgmath::Quaternion::from_axis_angle(cgmath::Vector3::unit_z(), cgmath::Deg(0.0))
+            } else {
+                cgmath::Quaternion::from_axis_angle(position.normalize(), cgmath::Deg(45.0))
+            };
+            let (tex_offset, tex_scale) = match atom.element.as_str() {
+                "O" => ([7.0/11.0, 0.0], [1.0/11.0, 1.0/11.0]),
+                "Si" => ([2.0/11.0, 1.0/11.0], [1.0/11.0, 1.0/11.0]),
+                _ => ([0.0, 0.0], [1.0/11.0, 1.0/11.0]),
+            };
+            let sphere_radius = match atom.element.as_str() {
+                "O" => 0.4,
+                "Si" => 0.5,
+                _ => 0.3,
+            };
+            let scale = cgmath::Vector3 {
+                x: sphere_radius,
+                y: sphere_radius,
+                z: sphere_radius,
+            };
+            sphere_instances.push(Instance {
+                position,
+                rotation,
+                scale,
+                tex_offset: tex_offset.into(),
+                tex_scale: tex_scale.into(),
+            });
+        }
+        // initiate bond instances
+        let bond_matrix = arc_parser::analyzer::arc_analyzer::calc_coordination_matrix(block);
+        for i in 0..bond_matrix.ncols() {
+            for j in i..bond_matrix.nrows() {
+                if bond_matrix[(i, j)] == 1 {
+                    let start_atom = block.atoms.get(i).unwrap();
+                    let end_atom = block.atoms.get(j).unwrap();
+                    let start_position = cgmath::Vector3 {
+                        x: start_atom.coordinate.0 as f32,
+                        y: start_atom.coordinate.1 as f32,
+                        z: start_atom.coordinate.2 as f32,
+                    } - center_of_cell;
+                    let end_position = cgmath::Vector3 {
+                        x: end_atom.coordinate.0 as f32,
+                        y: end_atom.coordinate.1 as f32,
+                        z: end_atom.coordinate.2 as f32,
+                    } - center_of_cell;
+                    let bond_position = (start_position + end_position) / 2.0;
+                    let bond_direction = end_position - start_position;
+                    // Calculate bond length
+                    let bond_length = bond_direction.magnitude();
+
+                    let radius_scale = 0.1;
+                    let height_scale = bond_length;
+                    let scale = cgmath::Vector3 {
+                        x: radius_scale,
+                        y: height_scale,
+                        z: radius_scale,
+                    };
+
+                    // Default cylinder orientation is along y-axis
+                    let cylinder_default_direction = cgmath::Vector3::unit_y();
+
+                    // Calculate the rotation needed to align the cylinder with the bond direction
+                    let normalized_bond_direction = bond_direction.normalize();
+
+                    // Find the rotation axis (cross product of default direction and target direction)
+                    let rotation_axis = cylinder_default_direction.cross(normalized_bond_direction);
+
+                    // Handle special cases (parallel vectors)
+                    let rotation = if rotation_axis.magnitude() < 1e-6 {
+                        // If bond is pointing down, rotate 180 degrees around x-axis
+                        if normalized_bond_direction.dot(cylinder_default_direction) < 0.0 {
+                            cgmath::Quaternion::from_axis_angle(cgmath::Vector3::unit_x(), cgmath::Deg(180.0))
+                        } else {
+                            // No rotation needed if already aligned
+                            cgmath::Quaternion::from_axis_angle(cgmath::Vector3::unit_x(), cgmath::Deg(0.0))
+                        }
+                    } else {
+                        // Calculate angle between the two directions
+                        let angle = cylinder_default_direction.dot(normalized_bond_direction)
+                            .clamp(-1.0, 1.0)
+                            .acos();
+
+                        // Create quaternion for the rotation
+                        cgmath::Quaternion::from_axis_angle(rotation_axis.normalize(), cgmath::Rad(angle))
+                    };
+                    let (tex_offset, tex_scale) = ([0.0, 0.0], [1.0, 1.0]);
+                    cylinder_instances.push(Instance {
+                        position: bond_position,
+                        rotation,
+                        scale,
+                        tex_offset: tex_offset.into(),
+                        tex_scale: tex_scale.into(),
+                    });
+                }
+            }
+        }
+        // initiate cell bondaries (use thin sylinders)
+        let crystal_size = cgmath::Vector3 {
+            x: block.crystal.x as f32,
+            y: block.crystal.y as f32,
+            z: block.crystal.z as f32,
         };
-        sphere_instances.push(Instance {
-            position,
-            rotation,
-            tex_offset: tex_offset.into(),
-            tex_scale: tex_scale.into(),
-        });
-    }
+        let vertices = [
+            [-crystal_size.x/2.0, -crystal_size.y/2.0, -crystal_size.z/2.0], // 0
+            [ crystal_size.x/2.0, -crystal_size.y/2.0, -crystal_size.z/2.0], // 1
+            [ crystal_size.x/2.0,  crystal_size.y/2.0, -crystal_size.z/2.0], // 2
+            [-crystal_size.x/2.0,  crystal_size.y/2.0, -crystal_size.z/2.0], // 3
+            [-crystal_size.x/2.0, -crystal_size.y/2.0,  crystal_size.z/2.0], // 4
+            [ crystal_size.x/2.0, -crystal_size.y/2.0,  crystal_size.z/2.0], // 5
+            [ crystal_size.x/2.0,  crystal_size.y/2.0,  crystal_size.z/2.0], // 6
+            [-crystal_size.x/2.0,  crystal_size.y/2.0,  crystal_size.z/2.0], // 7
+        ];
+        let edges = [
+            [0, 1], [1, 2], [2, 3], [3, 0],  // bottom
+            [4, 5], [5, 6], [6, 7], [7, 4],  // top
+            [0, 4], [1, 5], [2, 6], [3, 7],  // vertical
+        ];
+        let line = Cylinder::new(1.0, 1.0, 32);
+        let mut line_instances: Vec<Instance> = Vec::new();
+        let line_width = 0.03;
+        for edge in &edges {
+            let start = cgmath::Vector3 {
+                x: vertices[edge[0]][0],
+                y: vertices[edge[0]][1],
+                z: vertices[edge[0]][2],
+            };
+            let end = cgmath::Vector3 {
+                x: vertices[edge[1]][0],
+                y: vertices[edge[1]][1],
+                z: vertices[edge[1]][2],
+            };
+            line_instances.push(
+                Instance {
+                    position: (start + end) / 2.0,
+                    rotation: {
+                        let direction = end - start;
+                        let normalized_direction = direction.normalize();
+                        let default_direction = cgmath::Vector3::unit_y();
+                        let rotation_axis = default_direction.cross(normalized_direction);
+                        
+                        if rotation_axis.magnitude() < 1e-6 {
+                            // Vectors are parallel
+                            if normalized_direction.dot(default_direction) < 0.0 {
+                                // Direction is opposite to y-axis, rotate 180° around x
+                                cgmath::Quaternion::from_axis_angle(cgmath::Vector3::unit_x(), cgmath::Deg(180.0))
+                            } else {
+                                // Direction is same as y-axis, no rotation needed
+                                cgmath::Quaternion::from_axis_angle(cgmath::Vector3::unit_x(), cgmath::Deg(0.0))
+                            }
+                        } else {
+                            let angle = default_direction.dot(normalized_direction)
+                                .clamp(-1.0, 1.0)
+                                .acos();
+                            cgmath::Quaternion::from_axis_angle(rotation_axis.normalize(), cgmath::Rad(angle))
+                        }
+                    },
+                    scale: cgmath::Vector3 {
+                        x: line_width,
+                        y: start.distance(end),
+                        z: line_width,
+                    },
+                    tex_offset: [0.0, 0.0].into(),
+                    tex_scale: [1.0, 1.0].into(),
+                }
+            );
+        }
 
         // initiate a depth texture
         let depth_texture = texture::Texture::create_depth_texture(&device, &config, "depth_texture");
@@ -792,6 +948,20 @@ impl<'a> State<'a> {
             &sphere.indices,
             sphere_instances,
             ObjectType::Sphere,
+        ));
+        render_objects.push(RenderObject::new(
+            &device,
+            &cylinder.verticies,
+            &cylinder.indices,
+            cylinder_instances,
+            ObjectType::Cylinder,
+        ));
+        render_objects.push(RenderObject::new(
+            &device,
+            &line.verticies,
+            &line.indices,
+            line_instances,
+            ObjectType::Cylinder,
         ));
 
         Self {

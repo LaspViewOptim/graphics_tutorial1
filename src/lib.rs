@@ -1,4 +1,4 @@
-use std::iter;
+use std::{iter, path};
 use bytemuck::{Pod, Zeroable};
 use arc_parser;
 mod texture;
@@ -340,8 +340,9 @@ impl RenderObject {
     ) {
         self.instances = instances;
         let instance_data = self.instances.iter().map(Instance::to_raw).collect::<Vec<_>>();
-        
-        if instance_data.len() * std::mem::size_of::<Instance>() <= self.instance_buffer.size() as usize {
+        if instance_data.is_empty() {
+            return;
+        } else if instance_data.len() * std::mem::size_of::<Instance>() <= self.instance_buffer.size() as usize {
             // if the current buffer is large enough, reuse the current buffer
             queue.write_buffer(
                 &self.instance_buffer,
@@ -680,8 +681,6 @@ impl<'a> State<'a> {
             [4, 5], [5, 6], [6, 7], [7, 4],  // top
             [0, 4], [1, 5], [2, 6], [3, 7],  // vertical
         ];
-        let line = Cylinder::new(1.0, 1.0, 32);
-        let mut line_instances: Vec<Instance> = Vec::new();
         let line_width = 0.03;
         for edge in &edges {
             let start = cgmath::Vector3 {
@@ -694,7 +693,7 @@ impl<'a> State<'a> {
                 y: vertices[edge[1]][1],
                 z: vertices[edge[1]][2],
             };
-            line_instances.push(
+            cylinder_instances.push(
                 Instance {
                     position: (start + end) / 2.0,
                     rotation: {
@@ -817,14 +816,6 @@ impl<'a> State<'a> {
             cylinder_instances,
             ObjectType::Cylinder,
         ));
-        render_objects.push(RenderObject::new(
-            &device,
-            &line.verticies,
-            &line.indices,
-            line_instances,
-            ObjectType::Cylinder,
-        ));
-
         Self {
             surface,
             device,
@@ -924,10 +915,12 @@ impl<'a> State<'a> {
             render_pass.set_bind_group(0, Some(&self.diffuse_bind_group), &[]);
             render_pass.set_bind_group(1, &self.camera_bind_group, &[]);
             for object in &self.render_objects {
-                render_pass.set_vertex_buffer(0, object.vertex_buffer.slice(..));
-                render_pass.set_vertex_buffer(1, object.instance_buffer.slice(..));
-                render_pass.set_index_buffer(object.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
-                render_pass.draw_indexed(0..object.num_indicies, 0, 0..object.instances.len() as _);
+                if !object.instances.is_empty() {
+                    render_pass.set_vertex_buffer(0, object.vertex_buffer.slice(..));
+                    render_pass.set_vertex_buffer(1, object.instance_buffer.slice(..));
+                    render_pass.set_index_buffer(object.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
+                    render_pass.draw_indexed(0..object.num_indicies, 0, 0..object.instances.len() as _);
+                }
             }
         }
 
@@ -936,10 +929,199 @@ impl<'a> State<'a> {
 
         Ok(())
     }
+
+    pub async fn reload_structure(&mut self, block: &arc_parser::modules::structures::StructureBlock) {
+        let center_of_cell = cgmath::Vector3 {
+            x: block.crystal.x as f32 / 2.0,
+            y: block.crystal.y as f32 / 2.0,
+            z: block.crystal.z as f32 / 2.0,
+        };
+
+        // update atom instances
+        let mut sphere_instances: Vec<Instance> = Vec::new();
+        for atom in &block.atoms {
+            let position = cgmath::Vector3 {
+                x: atom.coordinate.0 as f32,
+                y: atom.coordinate.1 as f32,
+                z: atom.coordinate.2 as f32,
+            } - center_of_cell;
+            let rotation = if position.is_zero() {
+                cgmath::Quaternion::from_axis_angle(cgmath::Vector3::unit_z(), cgmath::Deg(0.0))
+            } else {
+                cgmath::Quaternion::from_axis_angle(position.normalize(), cgmath::Deg(45.0))
+            };
+            let (tex_offset, tex_scale) = match atom.element.as_str() {
+                "O" => ([7.0/11.0, 0.0], [1.0/11.0, 1.0/11.0]),
+                "Si" => ([2.0/11.0, 1.0/11.0], [1.0/11.0, 1.0/11.0]),
+                _ => ([0.0, 0.0], [1.0/11.0, 1.0/11.0]),
+            };
+            let sphere_radius = match atom.element.as_str() {
+                "O" => 0.4,
+                "Si" => 0.5,
+                _ => 0.3,
+            };
+            let scale = cgmath::Vector3 {
+                x: sphere_radius,
+                y: sphere_radius,
+                z: sphere_radius,
+            };
+            sphere_instances.push(Instance {
+                position,
+                rotation,
+                scale,
+                tex_offset: tex_offset.into(),
+                tex_scale: tex_scale.into(),
+            });
+        }
+        // update bond instances
+        let mut cylinder_instances: Vec<Instance> = Vec::new();
+        let bond_matrix = arc_parser::analyzer::arc_analyzer::calc_coordination_matrix(block);
+        for i in 0..bond_matrix.ncols() {
+            for j in i..bond_matrix.nrows() {
+                if bond_matrix[(i, j)] == 1 {
+                    let start_atom = block.atoms.get(i).unwrap();
+                    let end_atom = block.atoms.get(j).unwrap();
+                    let start_position = cgmath::Vector3 {
+                        x: start_atom.coordinate.0 as f32,
+                        y: start_atom.coordinate.1 as f32,
+                        z: start_atom.coordinate.2 as f32,
+                    } - center_of_cell;
+                    let end_position = cgmath::Vector3 {
+                        x: end_atom.coordinate.0 as f32,
+                        y: end_atom.coordinate.1 as f32,
+                        z: end_atom.coordinate.2 as f32,
+                    } - center_of_cell;
+                    let bond_position = (start_position + end_position) / 2.0;
+                    let bond_direction = end_position - start_position;
+                    // Calculate bond length
+                    let bond_length = bond_direction.magnitude();
+
+                    let radius_scale = 0.1;
+                    let height_scale = bond_length;
+                    let scale = cgmath::Vector3 {
+                        x: radius_scale,
+                        y: height_scale,
+                        z: radius_scale,
+                    };
+
+                    // Default cylinder orientation is along y-axis
+                    let cylinder_default_direction = cgmath::Vector3::unit_y();
+
+                    // Calculate the rotation needed to align the cylinder with the bond direction
+                    let normalized_bond_direction = bond_direction.normalize();
+
+                    // Find the rotation axis (cross product of default direction and target direction)
+                    let rotation_axis = cylinder_default_direction.cross(normalized_bond_direction);
+
+                    // Handle special cases (parallel vectors)
+                    let rotation = if rotation_axis.magnitude() < 1e-6 {
+                        // If bond is pointing down, rotate 180 degrees around x-axis
+                        if normalized_bond_direction.dot(cylinder_default_direction) < 0.0 {
+                            cgmath::Quaternion::from_axis_angle(cgmath::Vector3::unit_x(), cgmath::Deg(180.0))
+                        } else {
+                            // No rotation needed if already aligned
+                            cgmath::Quaternion::from_axis_angle(cgmath::Vector3::unit_x(), cgmath::Deg(0.0))
+                        }
+                    } else {
+                        // Calculate angle between the two directions
+                        let angle = cylinder_default_direction.dot(normalized_bond_direction)
+                            .clamp(-1.0, 1.0)
+                            .acos();
+
+                        // Create quaternion for the rotation
+                        cgmath::Quaternion::from_axis_angle(rotation_axis.normalize(), cgmath::Rad(angle))
+                    };
+                    cylinder_instances.push(Instance {
+                        position: bond_position,
+                        rotation,
+                        scale,
+                        tex_offset: [0.0, 0.0].into(),
+                        tex_scale: [1.0, 1.0].into(),
+                    });
+                }
+            }
+        }
+        // update cell boundaries
+        let crystal_size = cgmath::Vector3 {
+            x: block.crystal.x as f32,
+            y: block.crystal.y as f32,
+            z: block.crystal.z as f32,
+        };
+        let vertices = [
+            [-crystal_size.x/2.0, -crystal_size.y/2.0, -crystal_size.z/2.0], // 0
+            [ crystal_size.x/2.0, -crystal_size.y/2.0, -crystal_size.z/2.0], // 1
+            [ crystal_size.x/2.0,  crystal_size.y/2.0, -crystal_size.z/2.0], // 2
+            [-crystal_size.x/2.0,  crystal_size.y/2.0, -crystal_size.z/2.0], // 3
+            [-crystal_size.x/2.0, -crystal_size.y/2.0,  crystal_size.z/2.0], // 4
+            [ crystal_size.x/2.0, -crystal_size.y/2.0,  crystal_size.z/2.0], // 5
+            [ crystal_size.x/2.0,  crystal_size.y/2.0,  crystal_size.z/2.0], // 6
+            [-crystal_size.x/2.0,  crystal_size.y/2.0,  crystal_size.z/2.0], // 7
+        ];
+        let edges = [
+            [0, 1], [1, 2], [2, 3], [3, 0],  // bottom
+            [4, 5], [5, 6], [6, 7], [7, 4],  // top
+            [0, 4], [1, 5], [2, 6], [3, 7],  // vertical
+        ];
+        let line_width = 0.03;
+        for edge in &edges {
+            let start = cgmath::Vector3 {
+                x: vertices[edge[0]][0],
+                y: vertices[edge[0]][1],
+                z: vertices[edge[0]][2],
+            };
+            let end = cgmath::Vector3 {
+                x: vertices[edge[1]][0],
+                y: vertices[edge[1]][1],
+                z: vertices[edge[1]][2],
+            };
+            cylinder_instances.push(
+                Instance {
+                    position: (start + end) / 2.0,
+                    rotation: {
+                        let direction = end - start;
+                        let normalized_direction = direction.normalize();
+                        let default_direction = cgmath::Vector3::unit_y();
+                        let rotation_axis = default_direction.cross(normalized_direction);
+                        
+                        if rotation_axis.magnitude() < 1e-6 {
+                            // Vectors are parallel
+                            if normalized_direction.dot(default_direction) < 0.0 {
+                                // Direction is opposite to y-axis, rotate 180° around x
+                                cgmath::Quaternion::from_axis_angle(cgmath::Vector3::unit_x(), cgmath::Deg(180.0))
+                            } else {
+                                // Direction is same as y-axis, no rotation needed
+                                cgmath::Quaternion::from_axis_angle(cgmath::Vector3::unit_x(), cgmath::Deg(0.0))
+                            }
+                        } else {
+                            let angle = default_direction.dot(normalized_direction)
+                                .clamp(-1.0, 1.0)
+                                .acos();
+                            cgmath::Quaternion::from_axis_angle(rotation_axis.normalize(), cgmath::Rad(angle))
+                        }
+                    },
+                    scale: cgmath::Vector3 {
+                        x: line_width,
+                        y: start.distance(end),
+                        z: line_width,
+                    },
+                    tex_offset: [0.0, 0.0].into(),
+                    tex_scale: [1.0, 1.0].into(),
+                }
+            );
+        }
+        
+        // update render objects
+        if let Some(sphere_object) = self.render_objects.iter_mut().find(|object| object.object_type == ObjectType::Sphere) {
+            sphere_object.update_instances(&self.device, &self.queue, sphere_instances);
+        }
+        if let Some(cylinder_object) = self.render_objects.iter_mut().find(|object| object.object_type == ObjectType::Cylinder) {
+            cylinder_object.update_instances(&self.device, &self.queue, cylinder_instances);
+        }
+    }
 }
 
 #[cfg_attr(target_arch="wasm32", wasm_bindgen(start))]
-pub async fn show_strucutre(filename: &str) {
+pub async fn show_strucutre() {
     cfg_if::cfg_if! {
         if #[cfg(target_arch = "wasm32")] {
             std::panic::set_hook(Box::new(console_error_panic_hook::hook));
@@ -971,10 +1153,8 @@ pub async fn show_strucutre(filename: &str) {
 
         let _ = window.request_inner_size(PhysicalSize::new(450, 400));
     }
-
-    // read from file
-    let block = arc_parser::parser::parser::read_file(filename, true).unwrap().unwrap();
-    let mut state = State::from_structure_block(&window, &block[0]).await;
+    let mut state = create_empty_state(&window).await;
+    log::info!("Created state");
     let mut surface_configured = false;
 
     event_loop
@@ -1000,7 +1180,35 @@ pub async fn show_strucutre(filename: &str) {
                                 log::info!("physical_size: {physical_size:?}");
                                 surface_configured = true;
                                 state.resize(*physical_size);
-                            }
+                            },
+                            WindowEvent::DroppedFile(path) => {
+                                log::info!("Dropped file {:?}", path);
+                                // asyncronously read the file
+                                let future = async {
+                                    match arc_parser::parser::parser::read_file(path.to_str().unwrap_or_default(), true) {
+                                        Ok(Some(blocks)) if !blocks.is_empty() => {
+                                            state.reload_structure(&blocks[0]).await;
+                                        }
+                                        Err(e) => {
+                                            log::error!("Failed to read file: {:?}", e);
+                                        }
+                                        _ => {
+                                            log::error!("No blocks found in file");
+                                        }
+                                    }
+                                };
+                                // spawn the future on the executor
+                                #[cfg(not(target_arch = "wasm32"))]
+                                {
+                                    // Since we're already in an async context, just await the future directly
+                                    futures::executor::block_on(future);
+                                }
+                                #[cfg(target_arch = "wasm32")]
+                                {
+                                    // On wasm, spawn the future on the executor
+                                    wasm_bindgen_futures::spawn_local(future);
+                                }
+                            },
                             WindowEvent::RedrawRequested => {
                                 // This tells winit that we want another frame after this one
                                 state.window().request_redraw();
@@ -1035,4 +1243,29 @@ pub async fn show_strucutre(filename: &str) {
             }
         })
         .unwrap();
+}
+
+async fn create_empty_state<'a>(window: &'a Window) -> State<'a> {
+    let block = arc_parser::modules::structures::StructureBlock {
+        number: 0,
+        crystal: arc_parser::modules::structures::CrystalInfo {
+            x: 5.0,
+            y: 5.0,
+            z: 5.0,
+            alpha: 90.0,
+            beta: 90.0,
+            gamma: 90.0,
+        },
+        atoms: vec![arc_parser::modules::structures::Atom{
+            element: "O".to_string(),
+            coordinate: arc_parser::modules::structures::Coordinate{
+                0: 2.5,
+                1: 2.5,
+                2: 2.5,
+            },
+        }],
+        energy: 0.0,
+        symmetry: "C1".to_string(),
+    };
+    State::from_structure_block(window, &block).await
 }

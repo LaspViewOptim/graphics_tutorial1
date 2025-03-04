@@ -20,6 +20,7 @@ pollster = "0.2"
 bytemuck = "1.7.3"
 anyhow = "1.0"
 cgmath = "0.18"
+futures = "0.3"
 arc_parser = { git = "https://github.com/LipidL/arc_parser.git" }
 
 [dependencies.image]

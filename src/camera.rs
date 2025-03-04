@@ -157,16 +157,21 @@ impl CameraController {
         }
         if self.is_up_pressed && !self.is_ctrl_pressed {
             let radian = self.speed / forward_mag;
-            let new_forward = cgmath::Basis3::from_angle_x(cgmath::Rad(-radian)).rotate_vector(forward);
+            let axis = forward_norm.cross(camera.up).normalize();
+            let new_forward_norm = forward_norm * radian.cos() + axis.cross(forward_norm) * radian.sin();
+            let new_forward = new_forward_norm * forward_mag;
             camera.eye = camera.target - new_forward;
-            // Also rotate the up vector to maintain proper orientation
-            camera.up = cgmath::Basis3::from_angle_x(cgmath::Rad(-radian)).rotate_vector(camera.up);
+            // also update the up vector
+            camera.up = cgmath::Quaternion::from_axis_angle(axis, cgmath::Rad(radian)).rotate_vector(camera.up);
         }
         if self.is_down_pressed && !self.is_ctrl_pressed {
-            let radian = self.speed / forward_mag;
-            let new_forward = cgmath::Basis3::from_angle_x(cgmath::Rad(radian)).rotate_vector(forward);
+            let radian = - self.speed / forward_mag;
+            let axis = forward_norm.cross(camera.up).normalize();
+            let new_forward_norm = forward_norm * radian.cos() + axis.cross(forward_norm) * radian.sin();
+            let new_forward = new_forward_norm * forward_mag;
             camera.eye = camera.target - new_forward;
-            camera.up = cgmath::Basis3::from_angle_x(cgmath::Rad(radian)).rotate_vector(camera.up);
+            // also update the up vector
+            camera.up = cgmath::Quaternion::from_axis_angle(axis, cgmath::Rad(radian)).rotate_vector(camera.up);
         }
     }
 }

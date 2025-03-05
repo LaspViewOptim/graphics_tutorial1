@@ -66,10 +66,13 @@ pub struct CameraController {
     is_reset_pressed: bool,
     is_ctrl_pressed: bool,
     // mouse related fields
-    mouse_sensitivity: f32,
     is_mouse_left_pressed: bool,
     is_mouse_right_pressed: bool,
+    is_mouse_middle_pressed: bool,
+    mouse_movement_sensitivity: f32,
     mouse_movement: Option<(f32, f32)>,
+    mouse_wheel_sensitivity: f32,
+    mouse_wheel_movement: Option<f32>,
 }
 impl CameraController {
     pub fn new(speed: f32) -> Self {
@@ -82,10 +85,13 @@ impl CameraController {
             is_reset_pressed: false,
             is_ctrl_pressed: false,
             // mouse related fields
-            mouse_sensitivity: 0.01,
+            mouse_movement_sensitivity: 0.01,
             is_mouse_left_pressed: false,
             is_mouse_right_pressed: false,
+            is_mouse_middle_pressed: false,
             mouse_movement: None,
+            mouse_wheel_sensitivity: 0.1,
+            mouse_wheel_movement: None,
         }
     }
 
@@ -145,9 +151,28 @@ impl CameraController {
                         self.is_mouse_right_pressed = is_pressed;
                         true
                     }
+                    MouseButton::Middle => {
+                        self.is_mouse_middle_pressed;
+                        true
+                    }
                     _ => false,
                 }
             },
+            WindowEvent::MouseWheel { 
+                delta,
+                ..
+             } => {
+                match delta {
+                    MouseScrollDelta::LineDelta(_, y) => {
+                        self.mouse_wheel_movement = Some(*y);
+                        true
+                    }
+                    MouseScrollDelta::PixelDelta(pos) => {
+                        self.mouse_wheel_movement = Some(pos.y as f32);
+                        true
+                    }
+                }
+             }
             _ => false,
         }
     }
@@ -216,8 +241,8 @@ impl CameraController {
         if self.is_mouse_right_pressed {
             // only process mouse movement when the right mouse button is pressed
             if let Some((dx, dy)) = self.mouse_movement {
-                let dx = dx * self.mouse_sensitivity;
-                let dy = dy * self.mouse_sensitivity;
+                let dx = dx * self.mouse_movement_sensitivity;
+                let dy = dy * self.mouse_movement_sensitivity;
                 // rotate the forward vector around the up vector
                 let forward = camera.target - camera.eye;
                 let forward_norm = forward.normalize();
@@ -232,6 +257,14 @@ impl CameraController {
                 let right = new_forward_norm.cross(camera.up);
                 camera.eye = camera.target - (new_forward + right * dx).normalize() * forward.magnitude();
             }
+        }
+        // deal with mouse wheel movement
+        if let Some(dy) = self.mouse_wheel_movement {
+            // zoom in/out
+            let forward = camera.target - camera.eye;
+            let forward_norm = forward.normalize();
+            let new_forward = forward + forward_norm * dy * self.mouse_wheel_sensitivity;
+            camera.eye = camera.target - new_forward;
         }
     }
 }

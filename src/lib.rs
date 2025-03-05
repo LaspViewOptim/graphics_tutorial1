@@ -367,7 +367,6 @@ pub struct State<'a> {
     queue: wgpu::Queue,
     config: wgpu::SurfaceConfiguration,
     pub size: winit::dpi::PhysicalSize<u32>,
-    clear_color: wgpu::Color,
     // The window must be declared after the surface so
     // it gets dropped after it as the surface contains
     // unsafe references to the window's resources.
@@ -449,7 +448,6 @@ impl<'a> State<'a> {
             desired_maximum_frame_latency: 2,
             view_formats: vec![],
         };
-        let clear_color = wgpu::Color::BLACK;
         // load the texture
         let diffuse_bytes = include_bytes!("texture.png");
         let diffuse_texture = texture::Texture::from_bytes(&device, &queue, diffuse_bytes, "texture.png").unwrap();
@@ -822,7 +820,6 @@ impl<'a> State<'a> {
             queue,
             config,
             size,
-            clear_color,
             window,
             render_pipeline,
             diffuse_bind_group,

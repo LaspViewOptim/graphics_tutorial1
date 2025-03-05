@@ -65,6 +65,11 @@ pub struct CameraController {
     is_down_pressed: bool,
     is_reset_pressed: bool,
     is_ctrl_pressed: bool,
+    // mouse related fields
+    mouse_sensitivity: f32,
+    is_mouse_left_pressed: bool,
+    is_mouse_right_pressed: bool,
+    mouse_movement: Option<(f32, f32)>,
 }
 impl CameraController {
     pub fn new(speed: f32) -> Self {
@@ -76,10 +81,15 @@ impl CameraController {
             is_down_pressed: false,
             is_reset_pressed: false,
             is_ctrl_pressed: false,
+            // mouse related fields
+            mouse_sensitivity: 0.01,
+            is_mouse_left_pressed: false,
+            is_mouse_right_pressed: false,
+            mouse_movement: None,
         }
     }
 
-    pub fn process_events(&mut self, event: &WindowEvent) -> bool {
+    pub fn process_window_events(&mut self, event: &WindowEvent) -> bool {
         match event {
             WindowEvent::KeyboardInput {
                 event:
@@ -118,12 +128,41 @@ impl CameraController {
                     }
                     _ => false,
                 }
-            }
+            },
+            WindowEvent::MouseInput { 
+                state,
+                button,
+                ..
+            } => {
+                println!("{:?}", (button, state));
+                let is_pressed = *state == ElementState::Pressed;
+                match button {
+                    MouseButton::Left => {
+                        self.is_mouse_left_pressed = is_pressed;
+                        true
+                    }
+                    MouseButton::Right => {
+                        self.is_mouse_right_pressed = is_pressed;
+                        true
+                    }
+                    _ => false,
+                }
+            },
             _ => false,
         }
     }
 
-    pub fn update_camera(&self, camera: &mut Camera) {
+    pub fn process_device_events(&mut self, event: &DeviceEvent) -> bool {
+        match event {
+            DeviceEvent::MouseMotion { delta } => {
+                self.mouse_movement = Some((delta.0 as f32, delta.1 as f32));
+                true
+            },
+            _ => false,
+        }
+    }
+
+    pub fn update_camera(&mut self, camera: &mut Camera) {
         use cgmath::InnerSpace;
         // a vector that points from the camera's eye to the camera's target
         let forward = camera.target - camera.eye;
@@ -172,6 +211,27 @@ impl CameraController {
             camera.eye = camera.target - new_forward;
             // also update the up vector
             camera.up = cgmath::Quaternion::from_axis_angle(axis, cgmath::Rad(radian)).rotate_vector(camera.up);
+        }
+        // deal with mouse movement
+        if self.is_mouse_right_pressed {
+            // only process mouse movement when the right mouse button is pressed
+            if let Some((dx, dy)) = self.mouse_movement {
+                let dx = dx * self.mouse_sensitivity;
+                let dy = dy * self.mouse_sensitivity;
+                // rotate the forward vector around the up vector
+                let forward = camera.target - camera.eye;
+                let forward_norm = forward.normalize();
+                let axis = forward_norm.cross(camera.up).normalize();
+                // rotate vertically
+                let radian = -dy / forward.magnitude();// when moving mouse up, we actually want the camera to go down
+                let new_forward_norm = forward_norm * radian.cos() + axis.cross(forward_norm) * radian.sin();
+                let new_forward = new_forward_norm * forward.magnitude();
+                camera.eye = camera.target - new_forward;
+                camera.up = cgmath::Quaternion::from_axis_angle(axis, cgmath::Rad(radian)).rotate_vector(camera.up);
+                // rotate horizontally
+                let right = new_forward_norm.cross(camera.up);
+                camera.eye = camera.target - (new_forward + right * dx).normalize() * forward.magnitude();
+            }
         }
     }
 }

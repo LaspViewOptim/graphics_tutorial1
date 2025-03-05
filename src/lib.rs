@@ -851,19 +851,12 @@ impl<'a> State<'a> {
     }
 
     #[allow(unused_variables)]
-    pub fn input(&mut self, event: &WindowEvent) -> bool {
-        match event {
-            WindowEvent::CursorMoved { position, .. } => {
-                self.clear_color = wgpu::Color {
-                    r: position.x as f64 / self.size.width as f64,
-                    g: position.y as f64 / self.size.height as f64,
-                    b: 1.0,
-                    a: 1.0,
-                };
-                true
-            }
-            _ => self.camera_controller.process_events(event),
-        }
+    pub fn input_window_event(&mut self, event: &WindowEvent) -> bool {
+        self.camera_controller.process_window_events(event)
+    }
+
+    pub fn input_device_event(&mut self, event: &DeviceEvent) -> bool {
+        self.camera_controller.process_device_events(event)
     }
 
     pub fn update(&mut self) {
@@ -1153,7 +1146,7 @@ pub async fn show_strucutre() {
 
         let _ = window.request_inner_size(PhysicalSize::new(450, 400));
     }
-    let mut state = create_empty_state(&window).await;
+    let mut state:State = create_empty_state(&window).await;
     log::info!("Created state");
     let mut surface_configured = false;
 
@@ -1164,7 +1157,7 @@ pub async fn show_strucutre() {
                     ref event,
                     window_id,
                 } if window_id == state.window().id() => {
-                    if !state.input(event) {
+                    if !state.input_window_event(event) {
                         match event {
                             WindowEvent::CloseRequested
                             | WindowEvent::KeyboardInput {
@@ -1238,6 +1231,12 @@ pub async fn show_strucutre() {
                             _ => {}
                         }
                     }
+                }
+                Event::DeviceEvent {
+                    ref event,
+                    ..
+                } => {
+                    state.input_device_event(event);
                 }
                 _ => {}
             }

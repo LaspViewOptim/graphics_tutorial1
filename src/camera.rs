@@ -59,12 +59,12 @@ impl CameraUniform {
 
 pub struct CameraController {
     speed: f32,
-    is_left_pressed: bool,
-    is_right_pressed: bool,
-    is_up_pressed: bool,
-    is_down_pressed: bool,
+    is_keyboard_left_pressed: bool,
+    is_keyboard_right_pressed: bool,
+    is_keyboard_up_pressed: bool,
+    is_keyboard_down_pressed: bool,
     is_reset_pressed: bool,
-    is_ctrl_pressed: bool,
+    is_keyboard_ctrl_pressed: bool,
     // mouse related fields
     is_mouse_left_pressed: bool,
     is_mouse_right_pressed: bool,
@@ -78,12 +78,12 @@ impl CameraController {
     pub fn new(speed: f32) -> Self {
         Self {
             speed,
-            is_left_pressed: false,
-            is_right_pressed: false,
-            is_up_pressed: false,
-            is_down_pressed: false,
+            is_keyboard_left_pressed: false,
+            is_keyboard_right_pressed: false,
+            is_keyboard_up_pressed: false,
+            is_keyboard_down_pressed: false,
             is_reset_pressed: false,
-            is_ctrl_pressed: false,
+            is_keyboard_ctrl_pressed: false,
             // mouse related fields
             mouse_movement_sensitivity: 0.01,
             is_mouse_left_pressed: false,
@@ -109,19 +109,19 @@ impl CameraController {
                 let is_pressed = *state == ElementState::Pressed;
                 match keycode {
                     KeyCode::KeyA | KeyCode::ArrowLeft => {
-                        self.is_left_pressed = is_pressed;
+                        self.is_keyboard_left_pressed = is_pressed;
                         true
                     }
                     KeyCode::KeyD | KeyCode::ArrowRight => {
-                        self.is_right_pressed = is_pressed;
+                        self.is_keyboard_right_pressed = is_pressed;
                         true
                     }
                     KeyCode::KeyW | KeyCode::ArrowUp => {
-                        self.is_up_pressed = is_pressed;
+                        self.is_keyboard_up_pressed = is_pressed;
                         true
                     }
                     KeyCode::KeyS | KeyCode::ArrowDown => {
-                        self.is_down_pressed = is_pressed;
+                        self.is_keyboard_down_pressed = is_pressed;
                         true
                     }
                     KeyCode::Space => {
@@ -129,7 +129,7 @@ impl CameraController {
                         true
                     }
                     KeyCode::ControlLeft | KeyCode::ControlRight => {
-                        self.is_ctrl_pressed = is_pressed;
+                        self.is_keyboard_ctrl_pressed = is_pressed;
                         true
                     }
                     _ => false,
@@ -140,7 +140,6 @@ impl CameraController {
                 button,
                 ..
             } => {
-                println!("{:?}", (button, state));
                 let is_pressed = *state == ElementState::Pressed;
                 match button {
                     MouseButton::Left => {
@@ -152,7 +151,7 @@ impl CameraController {
                         true
                     }
                     MouseButton::Middle => {
-                        self.is_mouse_middle_pressed;
+                        self.is_mouse_middle_pressed = is_pressed;
                         true
                     }
                     _ => false,
@@ -161,7 +160,7 @@ impl CameraController {
             WindowEvent::MouseWheel { 
                 delta,
                 ..
-             } => {
+            } => {
                 match delta {
                     MouseScrollDelta::LineDelta(_, y) => {
                         self.mouse_wheel_movement = Some(*y);
@@ -172,7 +171,7 @@ impl CameraController {
                         true
                     }
                 }
-             }
+            },
             _ => false,
         }
     }
@@ -197,10 +196,10 @@ impl CameraController {
 
         // Prevents glitching when the camera gets too close to the
         // center of the scene.
-        if self.is_up_pressed && self.is_ctrl_pressed && forward_mag > self.speed {
+        if self.is_keyboard_up_pressed && self.is_keyboard_ctrl_pressed && forward_mag > self.speed {
             camera.eye += forward_norm * self.speed;
         } 
-        if self.is_down_pressed && self.is_ctrl_pressed {
+        if self.is_keyboard_down_pressed && self.is_keyboard_ctrl_pressed {
             camera.eye -= forward_norm * self.speed;
         }
         // the vector pointing to the right direction of the camera
@@ -210,16 +209,16 @@ impl CameraController {
         let forward = camera.target - camera.eye;
         let forward_mag = forward.magnitude();
 
-        if self.is_right_pressed && !self.is_ctrl_pressed {
+        if self.is_keyboard_right_pressed && !self.is_keyboard_ctrl_pressed {
             // Rescale the distance between the target and the eye so 
             // that it doesn't change. The eye, therefore, still 
             // lies on the circle made by the target and eye.
             camera.eye = camera.target - (forward + right * self.speed).normalize() * forward_mag;
         }
-        if self.is_left_pressed && !self.is_ctrl_pressed {
+        if self.is_keyboard_left_pressed && !self.is_keyboard_ctrl_pressed {
             camera.eye = camera.target - (forward - right * self.speed).normalize() * forward_mag;
         }
-        if self.is_up_pressed && !self.is_ctrl_pressed {
+        if self.is_keyboard_up_pressed && !self.is_keyboard_ctrl_pressed {
             let radian = self.speed / forward_mag;
             let axis = forward_norm.cross(camera.up).normalize();
             let new_forward_norm = forward_norm * radian.cos() + axis.cross(forward_norm) * radian.sin();
@@ -228,7 +227,7 @@ impl CameraController {
             // also update the up vector
             camera.up = cgmath::Quaternion::from_axis_angle(axis, cgmath::Rad(radian)).rotate_vector(camera.up);
         }
-        if self.is_down_pressed && !self.is_ctrl_pressed {
+        if self.is_keyboard_down_pressed && !self.is_keyboard_ctrl_pressed {
             let radian = - self.speed / forward_mag;
             let axis = forward_norm.cross(camera.up).normalize();
             let new_forward_norm = forward_norm * radian.cos() + axis.cross(forward_norm) * radian.sin();

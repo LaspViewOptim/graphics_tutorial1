@@ -247,14 +247,15 @@ impl CameraController {
                 let forward_norm = forward.normalize();
                 let axis = forward_norm.cross(camera.up).normalize();
                 // rotate vertically
-                let radian = -dy / forward.magnitude();// when moving mouse up, we actually want the camera to go down
+                let radian = -dy ;// when moving mouse up, we actually want the camera to go down
                 let new_forward_norm = forward_norm * radian.cos() + axis.cross(forward_norm) * radian.sin();
                 let new_forward = new_forward_norm * forward.magnitude();
                 camera.eye = camera.target - new_forward;
                 camera.up = cgmath::Quaternion::from_axis_angle(axis, cgmath::Rad(radian)).rotate_vector(camera.up);
                 // rotate horizontally
                 let right = new_forward_norm.cross(camera.up);
-                camera.eye = camera.target - (new_forward + right * dx).normalize() * forward.magnitude();
+                camera.eye = camera.target - (new_forward_norm + right * dx).normalize() * forward.magnitude();
+                self.mouse_movement = None; // reset the mouse movement
             }
         }
         // deal with mouse wheel movement
